@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/a2aproject/a2a-cli/internal/clicfg"
 	"github.com/a2aproject/a2a-cli/internal/clierr"
@@ -181,26 +181,30 @@ func (g *globalConfig) Environ() []string {
 
 // Execute runs the CLI and returns the exit code.
 func Execute() int {
+	// The arguments this process was given, kept for output-flag recovery: a
+	// parse error means cobra never bound --output, so the requested mode has to
+	// be read from the same slice the command was run with.
+	args := os.Args[1:]
 	cfg := &globalConfig{
 		Printer:   &output.Printer{Out: os.Stdout},
 		svcParams: &flagparse.ServiceParams{},
 	}
 	root, err := newRootCmd(cfg, deps{})
 	if err != nil {
-		return cfg.renderError(err)
+		return cfg.renderError(err, args)
 	}
 	if err := root.Execute(); err != nil {
-		return cfg.renderError(err)
+		return cfg.renderError(err, args)
 	}
 	return 0
 }
 
-func (g *globalConfig) renderError(err error) int {
+func (g *globalConfig) renderError(err error, args []string) int {
 	ce := clierr.Classify(err)
 	// Flag, argument and config errors fail before PersistentPreRunE sets the mode.
 	if mode := output.Mode(g.output); mode == output.ModeJson || mode == output.ModeJSONL {
 		g.Mode = mode
-	} else if v, ok := outputFlagFromArgs(os.Args[1:]); ok {
+	} else if v, ok := outputFlagFromArgs(args); ok {
 		// pflag stops at the first unknown flag, so `a2a send --bogus -o json`
 		// never binds --output. Recover it from the raw arguments so a flag-parse
 		// error still honours an explicitly requested JSON output.
@@ -223,23 +227,23 @@ func (g *globalConfig) renderError(err error) int {
 
 // outputFlagFromArgs returns the value of an explicit -o/--output flag even when
 // pflag stopped parsing before reaching it (an unknown flag before -o).
+//
+// The parse is done by pflag rather than by hand so that every spelling the CLI
+// accepts is accepted here too: -o json, -ojson, -o=json and --output=json, with
+// `--` ending flag parsing so a positional "-o json" is left alone.
 func outputFlagFromArgs(args []string) (string, bool) {
-	for i := range len(args) {
-		a := args[i]
-		switch {
-		case a == "-o" || a == "--output":
-			if i+1 < len(args) {
-				return args[i+1], true
-			}
-		case strings.HasPrefix(a, "--output="):
-			return strings.TrimPrefix(a, "--output="), true
-		case strings.HasPrefix(a, "-o="):
-			// pflag accepts -o=json as well as -o json; a parse error that stops
-			// before this token still has to honour the requested format.
-			return strings.TrimPrefix(a, "-o="), true
-		}
+	fs := pflag.NewFlagSet("output-recovery", pflag.ContinueOnError)
+	fs.ParseErrorsWhitelist.UnknownFlags = true
+	fs.SetInterspersed(true)
+	fs.SetOutput(io.Discard)
+	out := fs.StringP("output", "o", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", false
 	}
-	return "", false
+	if !fs.Changed("output") {
+		return "", false
+	}
+	return *out, true
 }
 
 func newRootCmd(cfg *globalConfig, deps deps) (*cobra.Command, error) {

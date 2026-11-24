@@ -1073,7 +1073,7 @@ func TestRenderErrorJSONModes(t *testing.T) {
 			var buf bytes.Buffer
 			g := &globalConfig{Printer: output.NewPrinter(&buf, mode)}
 
-			g.renderError(errors.New("boom"))
+			g.renderError(errors.New("boom"), nil)
 
 			var got struct {
 				Error clierr.Error `json:"error"`
@@ -1111,7 +1111,7 @@ func TestRenderErrorJSONForFlagAndArgErrors(t *testing.T) {
 			root := mustNewRoot(t, cfg, deps{cfgLoader: clicfg.LoadEmpty})
 			root.SetArgs(tt.args)
 
-			cfg.renderError(root.Execute())
+			cfg.renderError(root.Execute(), tt.args)
 
 			var got struct {
 				Error clierr.Error `json:"error"`
@@ -1708,6 +1708,53 @@ another_flag: 123
 
 			if diff := cmp.Diff(tt.wantVals, gotVals); diff != "" {
 				t.Fatalf("config show values wrong result (-want +got) diff = %s", diff)
+			}
+		})
+	}
+}
+
+func TestRenderErrorRecoversOutputFlag(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		args     []string
+		wantJSON bool
+	}{
+		{"separate", []string{"card", "get", "--bogus", "-o", "json"}, true},
+		{"attached", []string{"card", "get", "--bogus", "-ojson"}, true},
+		{"long-with-equals", []string{"card", "get", "--bogus", "--output=json"}, true},
+		// `--` ends flag parsing, so this run never asked for JSON.
+		{"after-double-dash", []string{"card", "get", "--bogus", "--", "-o", "json"}, false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out, errOut bytes.Buffer
+			cfg := &globalConfig{
+				Printer:   &output.Printer{Out: &out},
+				svcParams: &flagparse.ServiceParams{},
+				errOut:    &errOut,
+			}
+			root := mustNewRoot(t, cfg, deps{cfgLoader: clicfg.LoadEmpty})
+			root.SetArgs(tt.args)
+
+			cfg.renderError(root.Execute(), tt.args)
+
+			if !tt.wantJSON {
+				if out.Len() != 0 {
+					t.Fatalf("renderError() for %v wrote stdout %q, want no JSON output", tt.args, out.String())
+				}
+				return
+			}
+			var got struct {
+				Error clierr.Error `json:"error"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("renderError() for %v wrote stdout %q, want a JSON error object: %v", tt.args, out.String(), err)
+			}
+			if got.Error.Code != clierr.CodeUsage {
+				t.Errorf("renderError() for %v code = %q, want %q", tt.args, got.Error.Code, clierr.CodeUsage)
 			}
 		})
 	}

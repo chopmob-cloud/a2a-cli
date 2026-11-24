@@ -89,7 +89,7 @@ func newChatCmd(cfg *globalConfig, deps deps) *cobra.Command {
 					_, err := client.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id, Tenant: cfg.tenant})
 					return err
 				},
-				RenderError: func(err error) { cfg.renderError(err) },
+				RenderError: func(err error) { cfg.renderError(err, nil) },
 				Notify:      deps.notifyInterrupt,
 				Out:         cfg.stderr(),
 			}, flags.contextID, a2a.TaskID(flags.taskID))
