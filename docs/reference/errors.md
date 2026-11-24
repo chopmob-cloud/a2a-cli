@@ -164,7 +164,9 @@ case $code in
 esac
 ```
 
-An agent may reply with a `message` in place of a task; the `""` case above handles it. For a stream, read the state from the last `task` or `statusUpdate` record:
+An agent may reply with a `message` in place of a task; the `0)` branch above reads it through
+`.message.parts`. With `-o json`, a task that ends failed prints the task document and then the error
+object, so a reader that expects exactly one document will see extra data. For a stream, read the state from the last `task` or `statusUpdate` record:
 
 ```bash
 a2a send -a https://agent.example.com --stream -o jsonl "Summarize the report" |
